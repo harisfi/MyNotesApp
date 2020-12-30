@@ -1,4 +1,4 @@
-package com.hryzx.mynotesapp.db;
+package com.hryzx.consumerapp.db;
 
 import android.net.Uri;
 import android.provider.BaseColumns;
@@ -15,7 +15,7 @@ public class DatabaseContract {
         public static final String DESCRIPTION = "description";
         public static final String DATE = "date";
 
-        // untuk membuat URI content://com.mynotesapp/note
+        // untuk membuat URI content://com.hryzx.mynotesapp/note
         public static final Uri CONTENT_URI = new Uri.Builder().scheme(SCHEME)
                 .authority(AUTHORITY)
                 .appendPath(TABLE_NAME)
