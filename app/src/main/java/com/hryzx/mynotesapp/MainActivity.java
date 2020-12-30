@@ -5,28 +5,35 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import android.content.Context;
 import android.content.Intent;
+import android.database.ContentObserver;
 import android.database.Cursor;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
 import android.view.View;
 import android.widget.ProgressBar;
 
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import com.google.android.material.snackbar.Snackbar;
 import com.hryzx.mynotesapp.adapter.NoteAdapter;
+import com.hryzx.mynotesapp.db.DatabaseContract;
 import com.hryzx.mynotesapp.db.NoteHelper;
 import com.hryzx.mynotesapp.entity.Note;
 import com.hryzx.mynotesapp.helper.MappingHelper;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity implements LoadNotesCallback {
     private ProgressBar progressBar;
     private RecyclerView rvNotes;
     private NoteAdapter adapter;
-    private NoteHelper noteHelper;
     private static final String EXTRA_STATE = "EXTRA_STATE";
 
     @Override
@@ -50,12 +57,15 @@ public class MainActivity extends AppCompatActivity implements LoadNotesCallback
             startActivityForResult(intent, NoteAddUpdateActivity.REQUEST_ADD);
         });
 
+        HandlerThread handlerThread = new HandlerThread("DataObserver");
+        handlerThread.start();
+        Handler handler = new Handler(handlerThread.getLooper());
 
-        noteHelper = NoteHelper.getInstance(getApplicationContext());
-        noteHelper.open();
+        DataObserver myObserver = new DataObserver(handler, this);
+        getContentResolver().registerContentObserver(DatabaseContract.NoteColumns.CONTENT_URI, true, myObserver);
 
         if (savedInstanceState == null) {
-            new LoadNotesAsync(noteHelper, this).execute();
+            new LoadNoteAsync(this, this).execute();
         } else {
             ArrayList<Note> list = savedInstanceState.getParcelableArrayList(EXTRA_STATE);
             if (list != null) {
@@ -81,87 +91,59 @@ public class MainActivity extends AppCompatActivity implements LoadNotesCallback
         if (notes.size() > 0) {
             adapter.setListNotes(notes);
         } else {
-            adapter.setListNotes(new ArrayList<Note>());
+            adapter.setListNotes(new ArrayList<>());
             showSnackbarMessage("Tidak ada data saat ini");
         }
     }
 
-    private static class LoadNotesAsync extends AsyncTask<Void, Void, ArrayList<Note>> {
-
-        private final WeakReference<NoteHelper> weakNoteHelper;
+    private static class LoadNoteAsync {
+        private final WeakReference<Context> weakContext;
         private final WeakReference<LoadNotesCallback> weakCallback;
 
-        private LoadNotesAsync(NoteHelper noteHelper, LoadNotesCallback callback) {
-            weakNoteHelper = new WeakReference<>(noteHelper);
+        private LoadNoteAsync(Context context, LoadNotesCallback callback) {
+            weakContext = new WeakReference<>(context);
             weakCallback = new WeakReference<>(callback);
         }
 
-        @Override
-        protected void onPreExecute() {
-            super.onPreExecute();
+        void execute() {
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            Handler handler = new Handler(Looper.getMainLooper());
+
             weakCallback.get().preExecute();
-        }
+            executor.execute(() -> {
+                Context context = weakContext.get();
+                Cursor dataCursor = context.getContentResolver().query(DatabaseContract.NoteColumns.CONTENT_URI, null, null, null, null);
+                ArrayList<Note> notes = MappingHelper.mapCursorToArrayList(dataCursor);
 
-        @Override
-        protected ArrayList<Note> doInBackground(Void... voids) {
-            Cursor dataCursor = weakNoteHelper.get().queryAll();
-            return MappingHelper.mapCursorToArrayList(dataCursor);
-        }
-
-        @Override
-        protected void onPostExecute(ArrayList<Note> notes) {
-            super.onPostExecute(notes);
-
-            weakCallback.get().postExecute(notes);
-
+                handler.post(() -> weakCallback.get().postExecute(notes));
+            });
         }
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-
-        if (data != null) {
-            if (requestCode == NoteAddUpdateActivity.REQUEST_ADD) {
-                if (resultCode == NoteAddUpdateActivity.RESULT_ADD) {
-                    Note note = data.getParcelableExtra(NoteAddUpdateActivity.EXTRA_NOTE);
-
-                    adapter.addItem(note);
-                    rvNotes.smoothScrollToPosition(adapter.getItemCount() - 1);
-
-                    showSnackbarMessage("Satu item berhasil ditambahkan");
-                }
-            }
-            else if (requestCode == NoteAddUpdateActivity.REQUEST_UPDATE) {
-                if (resultCode == NoteAddUpdateActivity.RESULT_UPDATE) {
-
-                    Note note = data.getParcelableExtra(NoteAddUpdateActivity.EXTRA_NOTE);
-                    int position = data.getIntExtra(NoteAddUpdateActivity.EXTRA_POSITION, 0);
-
-                    adapter.updateItem(position, note);
-                    rvNotes.smoothScrollToPosition(position);
-
-                    showSnackbarMessage("Satu item berhasil diubah");
-                }
-                else if (resultCode == NoteAddUpdateActivity.RESULT_DELETE) {
-                    int position = data.getIntExtra(NoteAddUpdateActivity.EXTRA_POSITION, 0);
-
-                    adapter.removeItem(position);
-
-                    showSnackbarMessage("Satu item berhasil dihapus");
-                }
-            }
-        }
-    }
-
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        noteHelper.close();
-    }
-
+    /**
+     * Tampilkan snackbar
+     *
+     * @param message inputan message
+     */
     private void showSnackbarMessage(String message) {
         Snackbar.make(rvNotes, message, Snackbar.LENGTH_SHORT).show();
+    }
+
+    public static class DataObserver extends ContentObserver {
+
+        final Context context;
+
+        public DataObserver(Handler handler, Context context) {
+            super(handler);
+            this.context = context;
+        }
+
+        @Override
+        public void onChange(boolean selfChange) {
+            super.onChange(selfChange);
+            new LoadNoteAsync(context, (LoadNotesCallback) context).execute();
+
+        }
     }
 }
 
